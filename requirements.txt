@@ -1,0 +1,6 @@
+streamlit
+torch
+ultralytics
+huggingface_hub
+pillow
+opencv-python
