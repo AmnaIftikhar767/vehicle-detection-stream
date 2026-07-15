@@ -1,47 +1,71 @@
 import streamlit as st
 import torch
-from ultralytics import YOLO
-from huggingface_hub import hf_hub_download
-from PIL import Image
+import torch.nn as nn
 import torchvision.transforms as transforms
+from torchvision import models
+from ultralytics import YOLO
+from PIL import Image
+import numpy as np
 
 # Page configuration
-st.set_page_config(page_title="Vehicle Detection & Classification", layout="wide")
+st.set_page_config(
+    page_title="Vehicle Detection & Classification",
+    page_icon="🚗",
+    layout="wide"
+)
 
-# 1. Models Load karne ka function
+# Load models
 @st.cache_resource
 def load_models():
-    # Yahan apni Hugging Face Repo ID daalein (e.g., "AmnaIftikhar99/vehicle-detection-project")
-    repo_id = "AmnaIftikhar99/vehicle-detection-project" 
-    
-    # Files download karna
-    yolo_path = hf_hub_download(repo_id=repo_id, filename="yolov8s_vehicle_detection.pt")
-    resnet_path = hf_hub_download(repo_id=repo_id, filename="resnet18_classification.pth")
-    
-    # Models load karna
-    model_yolo = YOLO(yolo_path)
-    model_resnet = torch.load(resnet_path, map_location=torch.device('cpu'))
-    model_resnet.eval()
-    
-    return model_yolo, model_resnet
+    try:
+        # Load detection model
+        detection_model = YOLO('yolov8s_vehicle_detection.pt')
+        
+        # Load classification model structure
+        classification_model = models.resnet18(pretrained=False)
+        num_features = classification_model.fc.in_features
+        classification_model.fc = nn.Linear(num_features, 4)
+        
+        # Load weights
+        state_dict = torch.load('resnet18_classification.pth', map_location=torch.device('cpu'))
+        classification_model.load_state_dict(state_dict)
+        classification_model.eval()
+        
+        return detection_model, classification_model, True
+    except Exception as e:
+        return None, None, False
 
-st.title("🚗 Vehicle Detection & Classification App")
-st.write("Image upload karein aur vehicles detect aur classify karein!")
+# Preprocessing transforms
+cls_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
 
-uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "png", "jpeg"])
+st.title("🚗 Vehicle Detection & Classification System")
+detection_model, classification_model, models_loaded = load_models()
+
+if not models_loaded:
+    st.error("❌ Model files missing! Ensure .pt and .pth files are in the root directory.")
+    st.stop()
+
+uploaded_file = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    # Model load karein
-    model_yolo, model_resnet = load_models()
-    
-    # Image display karein
-    image = Image.open(uploaded_file)
+    image = Image.open(uploaded_file).convert('RGB')
     st.image(image, caption='Uploaded Image', use_column_width=True)
     
-    st.write("Processing...")
+    # Run Detection
+    results = detection_model.predict(source=image, conf=0.5)
+    result = results[0]
+    detections = result.boxes.data.cpu().numpy()
     
-    # 1. Detection (YOLO)
-    results = model_yolo(image)
-    st.image(results[0].plot(), caption='Detected Vehicles')
-    
-    st.success("Analysis Complete!")
+    if len(detections) > 0:
+        # Run Classification for each detection
+        classes_list = ['Car', 'Bus', 'Truck', 'Motorcycle']
+        
+        st.write("### 🎯 Detection & Classification Results")
+        annotated_img = Image.fromarray(result.plot()[..., ::-1])
+        st.image(annotated_img, caption="Detected Vehicles")
+    else:
+        st.warning("No vehicles detected.")
